@@ -1,4 +1,4 @@
-"""Two offline commands: produce a synthetic demo, or verify a report."""
+"""Offline synthetic demos and independent report verification."""
 
 import argparse
 import json
@@ -14,11 +14,25 @@ def main(argv=None):
     demo.add_argument("--output", required=True)
     verify = commands.add_parser("verify", help="independently reconstruct an existing report")
     verify.add_argument("report")
+    event_demo = commands.add_parser("demo-events", help="write a new synthetic v3 supplied-events report")
+    event_demo.add_argument("--output", required=True)
+    event_verify = commands.add_parser("verify-events", help="independently reconstruct a v3 report")
+    event_verify.add_argument("report")
     args = parser.parse_args(argv)
     try:
         if args.command == "verify":
             from .verification import verify_report
             result = verify_report(args.report)
+        elif args.command == "verify-events":
+            from .event_verification import verify_event_report
+            result = verify_event_report(args.report)
+        elif args.command == "demo-events":
+            from .event_report import save_event_report
+            from .event_accounting import account_events
+            from .event_demo import synthetic_events
+            events = synthetic_events()
+            accounting = account_events(events, initial_cash=1000)
+            result = save_event_report(args.output, events, accounting, data_kind="synthetic")
         else:
             from .report import save_report
             from .accounting import account
