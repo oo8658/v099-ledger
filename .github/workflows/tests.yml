@@ -24,4 +24,5 @@ jobs:
           cd /tmp
           /tmp/v099-wheel-test/bin/v099-ledger demo --output /tmp/v099-example
           /tmp/v099-wheel-test/bin/v099-ledger verify /tmp/v099-example
-
+          /tmp/v099-wheel-test/bin/v099-ledger demo-events --output /tmp/v099-event-example
+          /tmp/v099-wheel-test/bin/v099-ledger verify-events /tmp/v099-event-example
