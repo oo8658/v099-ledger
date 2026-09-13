@@ -4,7 +4,7 @@
 
 Policy-free linear perpetual accounting for supplied fills, with an independent verifier. Runtime uses the Python standard library only.
 
-当前版本：0.2.0。单标的、报价币结算、基础币数量、多头或空头、一次一个净持仓。支持完整开仓/平仓；末端可以保留持仓。没有策略、信号、仓位分配、止损、参数搜索、交易所客户端、账户或下单接口。
+当前版本：0.3.0。单标的、报价币结算、基础币数量、多头或空头、一次一个净持仓。新增 v3 显式事件接口，支持加仓、部分平仓、反手和延迟入账资金费；原 v2 接口及报告格式保留。没有策略、信号、仓位分配、止损、参数搜索、交易所客户端、账户或下单接口。
 
 ## 安装和演示
 
@@ -16,11 +16,44 @@ source .venv/bin/activate
 python -m pip install .
 v099-ledger demo --output ./demo-report
 v099-ledger verify ./demo-report
+v099-ledger demo-events --output ./event-report
+v099-ledger verify-events ./event-report
 ```
 
 Windows 命令提示符的激活命令为 `.venv\Scripts\activate`。也可以用 `python -m v099_ledger` 替代命令。安装后运行不需要网络或第三方运行依赖。已有输出目录会被拒绝覆盖。
 
-演示是 6 个人工标记价点和 4 笔人工指定成交，共 2 笔完整交易。数量和时点是写在示例中的算术输入，不根据价格变化产生，没有盈利有效性含义。`SYNTH` 标签、毫秒时点和价格全部为合成示例。源码见 [demo.py](src/v099_ledger/demo.py)。
+v2 演示是 6 个人工标记价点和 4 笔人工指定成交，共 2 笔完整交易。v3 演示是 13 个显式人工事件，其中有 6 笔人工成交。数量和时点都写死在算术示例中，不根据价格变化产生，没有盈利有效性含义。`SYNTH` 标签、毫秒时点和价格全部为合成示例。源码见 [demo.py](src/v099_ledger/demo.py) 和 [event_demo.py](src/v099_ledger/event_demo.py)。
+
+## v3：显式事件记账
+
+```python
+from v099_ledger.event_accounting import account_events
+from v099_ledger.event_demo import synthetic_events
+from v099_ledger.event_report import save_event_report
+from v099_ledger.event_verification import verify_event_report
+
+events = synthetic_events()
+result = account_events(events, initial_cash=1000)
+save_event_report("event-report", events, result, data_kind="synthetic")
+print(verify_event_report("event-report"))
+```
+
+`events` 按输入顺序处理，同一毫秒内也不重排；第一个事件必须是 `mark`。每个事件只接受下表列出的字段，不接收任意附加字段。
+
+| 事件 | 必需字段 | 含义 |
+|---|---|---|
+| `mark` | `timestamp`, `kind`, `price` | 更新正标记价，仅用于估值 |
+| `fill` | `timestamp`, `kind`, `quantity`, `price`, `fee_rate` | 已给定的带符号成交数量、成交价与费率；可加仓、部分平仓或反手 |
+| `funding_due` | `timestamp`, `kind`, `id` | 记录此刻的持仓数量及所属交易周期，等待结算输入 |
+| `funding_post` | `timestamp`, `kind`, `id`, `rate`, `settlement_mark` | 根据匹配到期事件的数量和明确给定的费率、结算价入账 |
+
+`timestamp` 是非负精确整数毫秒，整体非递减。资金费 `id` 在一份报告内唯一，且每个 `funding_due` 必须在报告结束前恰好对应一次 `funding_post`；可以在原持仓已经平掉之后入账，现金流仍归到原交易周期。正费率下，多头支付、空头收取。空仓到期记录的资金费为零。`funding_post` 的 `settlement_mark` 是调用者提供的结算价，不由最近估值推断。延迟入账之前的权益不包含尚未入账的资金费。
+
+同向加仓采用成交数量加权成本价。部分平仓只对已平数量实现盈亏，剩余持仓继续使用原成本价。单笔反手先平旧仓、再以同一成交价建立反向仓，并按数量比例分配该笔手续费。`trades.json` 只列已完整平掉的交易周期，`summary.json` 同时保留尚未平掉的仓位和未实现盈亏。已平交易的资金费可以在后来入账，历史交易合计在最终报告中更新。
+
+v3 报告文件固定为 `run.json`、`events.json`、`ledger.json`、`trades.json`、`summary.json` 和 `manifest.json`。独立的 `event_verification.py` 从 `events.json` 重新记账，并核对每一行账本、每笔已平交易和汇总；它不导入 `event_accounting.py`。修改派生文件后重新写哈希仍会被拒绝。`verify-events` 不接受 v2 格式，`verify` 不接受 v3 格式。v3 新接口同样不对输入事件真实性作认证。
+
+下文的 `account`、`save_report`、`verify_report`、`demo` 与 `verify` 继续说明 v2 完整平仓接口，其计算约定和格式未改变。
 
 ## 最小调用
 
@@ -53,7 +86,7 @@ save_report("my-report", market, fills, result, data_kind="synthetic")
 | `price` | 已经给定的成交价，工具不生成成交价格 |
 | `fee_rate` | 该笔成交的非负费率小数，必须显式提供 |
 
-本版要求已有持仓只能用反向相同数量全部平仓。加仓、部分平仓和单笔反手会拒收；可以先平仓再开仓。这个限制属于输入格式支持范围。工具不会自动平仓、补发成交或限制用户给定的敞口。
+v2 接口要求已有持仓只能用反向相同数量全部平仓。加仓、部分平仓和单笔反手会拒收；这些操作请使用上面的 v3 显式事件接口。工具不会自动平仓、补发成交或限制用户给定的敞口。
 
 字段严格按白名单接收，不接收信号、研究参数或任意附加字段。实际行情、成交和费率的正确性由调用者负责；私有使用者不应把真实成交报告当成可公开的示例。
 
@@ -99,7 +132,7 @@ save_report("my-report", market, fills, result, data_kind="synthetic")
 
 **PASS 只表示相对于给定输入的会计一致性。** 数据和所有产物如果一起被改成另一套自洽结果，工具不能证明其来源真实。它不认证数据、不验证策略、不证明成交合理或收益可复制。输入中已经缺失的真实资金费也无法凭空恢复。
 
-使用 float：现金/盈亏比较绝对容差为 `1e-7`、相对容差 `1e-10`；价格、数量和费率仅使用相对容差，零值须精确相等。适用于研究复核，不是定点精度的交易所账单系统。
+v2 使用 float 会计；v3 内部使用 Decimal 记账，报告仍序列化为 JSON 数字。两个验证器的现金/盈亏比较绝对容差为 `1e-7`、相对容差为 `1e-10`；价格和数量仅使用相对容差，零值须精确相等。适用于研究复核，不是定点精度的交易所账单系统。
 
 ## 开发
 
@@ -109,8 +142,8 @@ python -m pytest
 python -m build
 ```
 
-测试覆盖手算多空、正负资金费、结算时点、末端保留仓位、输入拒收、重新写哈希后的篡改、独立验证器导入、CLI 与拒绝覆盖。CI 配置覆盖 Python 3.11/3.12/3.13；配置存在不等于已经在 GitHub 运行通过。
+测试覆盖手算多空、正负资金费、部分平仓、反手、延迟入账、结算时点、末端保留仓位、输入拒收、重新写哈希后的篡改、独立验证器导入、CLI 与拒绝覆盖。CI 配置覆盖 Python 3.11/3.12/3.13；配置存在不等于已经在 GitHub 运行通过。
 
-0.2.0 使用报告格式 v2，不接收旧格式。旧接口不作为兼容层保留，以避免重新带入决策逻辑。
+0.2.0 起使用报告格式 v2；0.3.0 增加格式 v3，二者的命令和报告分别验证，不互相解释。没有兼容早期实验格式的接口，以避免重新带入决策逻辑。
 
 代码按 [MIT License](LICENSE) 提供。来源边界见 [PROVENANCE.md](PROVENANCE.md)。
